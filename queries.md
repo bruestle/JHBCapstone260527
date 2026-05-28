@@ -19,8 +19,24 @@
 - Show me my most recent lab results
 - Summarize my medical history
 - My elbow is sore.  What should I do?
-- I have a pain in my chect.  What should I do?
+- I have a pain in my chest.  What should I do?
 - How do I tell if I have measles?
+
+
+## Doctor
+- When is my next appointment?
+- Make an appointment for James Pace
+- Cancel the appointment for Pace
+- Show me James Pace's most recent lab results
+- Summarize James Pace's medical history
+- Make an entry into Jame Pace's medical history.
+- What are the symptoms of measles?
+- Patient presents with red dots all over his torso.  What could this be?
+- Show James Pace's 5 most recent encounters
+
+
+# Github Public Repo
+https://github.com/bruestle/JHBCapstone260527.git
 
 
 

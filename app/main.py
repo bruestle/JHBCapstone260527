@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="requests")
+
 from datetime import date
 
 import streamlit as st
@@ -16,10 +19,10 @@ if not is_db_seeded():
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-login_page = st.Page("pages/login.py", title="Login", icon="🔐")
-patient_page = st.Page("pages/patient.py", title="Patient", icon="🧑")
-doctor_page = st.Page("pages/doctor.py", title="Doctor", icon="👨‍⚕️")
-admin_page = st.Page("pages/admin.py", title="Admin", icon="🛡️")
+login_page = st.Page("_pages/login.py", title="Login", icon="🔐")
+patient_page = st.Page("_pages/patient.py", title="Patient", icon="🧑")
+doctor_page = st.Page("_pages/doctor.py", title="Doctor", icon="👨‍⚕️")
+admin_page = st.Page("_pages/admin.py", title="Admin", icon="🛡️")
 
 if not st.session_state.authenticated:
     navigation = st.navigation([login_page], position="hidden")

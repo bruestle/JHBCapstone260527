@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
 from db import DOCTOR_SEED, PATIENT_SEED
+
+_REQUIRED_PASSWORD: str = os.environ.get("CAPSTONE_PASSWORD", "")
 
 
 def _set_selected_role(role: str) -> None:
@@ -103,6 +107,7 @@ username = ""
 if selected_role:
     with st.form("login_form"):
         username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Log In")
 
 if submitted:
@@ -110,10 +115,28 @@ if submitted:
 
     if not selected_role:
         st.error("Select a role first.")
+    elif not _REQUIRED_PASSWORD:
+        st.error("Server configuration error: CAPSTONE_PASSWORD environment variable is not set.")
+    elif password != _REQUIRED_PASSWORD:
+        st.error("Invalid credentials")
     elif resolved_user_id is not None:
         st.session_state.authenticated = True
         st.session_state.role = selected_role.lower()
         st.session_state.user_id = resolved_user_id
+        # Store full display name for doctor/patient pages
+        uname = username.strip()
+        if selected_role == "Doctor":
+            for did, first, last, _ in DOCTOR_SEED:
+                if last.lower() == uname.lower():
+                    st.session_state.user_name = f"{last}, {first}"
+                    break
+        elif selected_role == "Patient":
+            for pid, first, last in PATIENT_SEED:
+                if last.lower() == uname.lower():
+                    st.session_state.user_name = f"{last}, {first}"
+                    break
+        else:
+            st.session_state.user_name = "Admin"
         st.rerun()
     else:
         st.error("Invalid credentials")

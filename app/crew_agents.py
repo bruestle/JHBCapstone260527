@@ -4,9 +4,11 @@ from datetime import date
 from typing import Iterable
 
 from db import (
+    add_medical_record,
     cancel_appointment,
     create_appointment,
     fetch_appointments_for_day,
+    fetch_appointments_for_doctor,
     fetch_appointments_for_patient,
     fetch_counts,
     fetch_doctor_day_patients_with_keyword,
@@ -598,9 +600,259 @@ if CREWAI_AVAILABLE:
             get_available_slots,
         ]
 
+    # ------------------------------------------------------------------ #
+    # Doctor-scoped tool factory                                           #
+    # ------------------------------------------------------------------ #
+
+    def _make_doctor_tools(doctor_id: str, doctor_name: str) -> list:
+        """Return tool instances scoped to a specific doctor."""
+
+        @tool("get_my_schedule")
+        def get_my_schedule(date_str: str) -> str:
+            """Get MY appointment schedule for a given date.
+
+            Use this when asked about today's schedule, how many patients I have,
+            or who I see on a specific date.
+            Input: date_str — ISO date (e.g. '2026-05-27')
+            """
+            rows = [
+                r for r in fetch_appointments_for_day(date_str)
+                if str(r.get("doctor_id")) == str(doctor_id)
+            ]
+            if not rows:
+                return f"No appointments on {date_str}."
+            lines = [f"My schedule for {date_str} ({len(rows)} appointment(s)):"]
+            for r in rows:
+                lines.append(
+                    f"  {r['start_at']}  {r['patient_name']}  "
+                    f"[{r.get('visit_type', '')}]  status={r.get('status', '')}"
+                )
+            return "\n".join(lines)
+
+        @tool("get_my_next_appointment")
+        def get_my_next_appointment() -> str:
+            """Get my next upcoming appointment.
+
+            Use this when asked 'When is my next appointment?' or similar.
+            """
+            today_str = date.today().isoformat()
+            rows = [
+                r for r in fetch_appointments_for_doctor(doctor_id)
+                if r.get("start_at", "") >= today_str and r.get("status") != "cancelled"
+            ]
+            if not rows:
+                return "No upcoming appointments found."
+            rows.sort(key=lambda r: r["start_at"])
+            r = rows[0]
+            return (
+                f"Your next appointment:\n"
+                f"  {r['start_at']}  {r['patient_name']}  "
+                f"[{r.get('visit_type', '')}]  status={r.get('status', '')}"
+            )
+
+        @tool("get_patient_records")
+        def get_patient_records(patient_name: str) -> str:
+            """Fetch the most recent medical records for a named patient.
+
+            Use this when asked for a patient's recent lab results, visit notes,
+            or to review their chart before seeing them.
+            Input: patient's last name, 'Last, First', or 'First Last'.
+            Returns the 12 most recent records.
+            """
+            match = _find_patient(patient_name)
+            if match is None:
+                return f"No patient found matching '{patient_name}'."
+            records = fetch_medical_records(str(match["patient_id"]))
+            if not records:
+                return f"No medical records found for {match['patient_name']}."
+            recent = records[:12]
+            lines = [
+                f"Medical records for {match['patient_name']} "
+                f"(showing {len(recent)} of {len(records)} most recent):"
+            ]
+            for r in recent:
+                etype = r.get("encounter_type") or ""
+                note_preview = (r.get("note") or "").replace("\n", " ")[:450]
+                lines.append(f"[{r['created_at']}] [{etype}] {note_preview}")
+            return "\n".join(lines)
+
+        @tool("search_patient_history_for_doctor")
+        def search_patient_history_for_doctor(patient_name: str, query: str) -> str:
+            """Semantic search through a patient's medical history for specific clinical info.
+
+            Use this to find medications, diagnoses, lab values, symptoms, or any
+            targeted clinical detail. More precise than fetching all records.
+            Inputs:
+              patient_name: last name or full name
+              query: what to search for (e.g. 'lab results', 'HbA1c', 'current medications')
+            """
+            match = _find_patient(patient_name)
+            if match is None:
+                return f"No patient found matching '{patient_name}'."
+            results = search_patient_history_semantic(
+                patient_id=match["patient_id"], query=query, top_k=8
+            )
+            if not results:
+                return (
+                    f"No relevant records found for '{query}' in {match['patient_name']}'s history. "
+                    "Try get_patient_records for the full record list."
+                )
+            lines = [f"Search results for '{query}' in {match['patient_name']}'s history:"]
+            for r in results:
+                score = f"{r['similarity']:.2f}" if r.get("similarity") is not None else "?"
+                snippet = r["text"].replace("\n", " ")[:400]
+                lines.append(f"[{r['created_at']}] (score {score}): {snippet}")
+            return "\n".join(lines)
+
+        @tool("add_patient_medical_record")
+        def add_patient_medical_record(
+            patient_name: str,
+            note: str,
+            encounter_type: str = "OfficeVisit",
+        ) -> str:
+            """Add a new medical record entry for a named patient.
+
+            Use this when asked to 'make an entry', 'add a note', 'document',
+            or 'record' something in a patient's chart.
+            Inputs:
+              patient_name: last name or 'Last, First' or 'First Last'
+              note: full note text to record (include all clinical detail)
+              encounter_type: e.g. OfficeVisit, FollowUpVisit, LabResult (default: OfficeVisit)
+            """
+            match = _find_patient(patient_name)
+            if match is None:
+                return f"No patient found matching '{patient_name}'."
+            record_id = add_medical_record(
+                patient_id=match["patient_id"],
+                note=note,
+                doctor_id=doctor_id,
+                encounter_type=encounter_type,
+            )
+            return (
+                f"Medical record added successfully.\n"
+                f"  Patient:        {match['patient_name']}\n"
+                f"  Encounter type: {encounter_type}\n"
+                f"  Record ID:      {record_id}\n"
+                f"  Note preview:   {note[:120]}{'...' if len(note) > 120 else ''}"
+            )
+
+        @tool("book_appointment_for_patient")
+        def book_appointment_for_patient(
+            patient_name: str,
+            date_str: str,
+            time_str: str,
+        ) -> str:
+            """Book an appointment for a named patient with ME (this doctor).
+
+            Call get_my_available_slots first to confirm a slot is open.
+            Inputs:
+              patient_name: patient's last name or full name
+              date_str: ISO date (e.g. '2026-06-10')
+              time_str: time in any common format ('15:00', '3:00pm', '3pm')
+            """
+            from datetime import datetime as _dt
+
+            patient = _find_patient(patient_name)
+            if patient is None:
+                return f"No patient found matching '{patient_name}'."
+
+            clean_time = time_str.strip().lower().replace(" ", "")
+            parsed_time = None
+            for fmt in ("%H:%M", "%I:%M%p", "%I%p"):
+                try:
+                    parsed_time = _dt.strptime(clean_time, fmt)
+                    break
+                except ValueError:
+                    continue
+            if parsed_time is None:
+                return f"Could not parse time '{time_str}'. Use formats like '15:00', '3:00pm', or '3pm'."
+
+            start_at = f"{date_str} {parsed_time.strftime('%H:%M')}"
+            appt_id = create_appointment(
+                patient_id=patient["patient_id"],
+                doctor_id=doctor_id,
+                start_at=start_at,
+            )
+            return (
+                f"Appointment booked.\n"
+                f"  Patient:   {patient['patient_name']}\n"
+                f"  Doctor:    {doctor_name}\n"
+                f"  Date/Time: {start_at}\n"
+                f"  Status:    booked\n"
+                f"  ID:        {appt_id}"
+            )
+
+        @tool("cancel_patient_appointment")
+        def cancel_patient_appointment(patient_name: str) -> str:
+            """Cancel the next upcoming appointment for a named patient with THIS doctor.
+
+            Use this when asked to cancel an appointment for a specific patient.
+            Input: patient's last name or full name.
+            """
+            patient = _find_patient(patient_name)
+            if patient is None:
+                return f"No patient found matching '{patient_name}'."
+
+            today_str = date.today().isoformat()
+            rows = [
+                r for r in fetch_appointments_for_patient(patient["patient_id"])
+                if r.get("start_at", "") >= today_str
+                and str(r.get("doctor_id", "")) == str(doctor_id)
+                and r.get("status") != "cancelled"
+            ]
+            if not rows:
+                return (
+                    f"No upcoming appointments found for {patient['patient_name']} with {doctor_name}."
+                )
+            rows.sort(key=lambda r: r["start_at"])
+            target = rows[0]
+            ok = cancel_appointment(target["appointment_id"], patient["patient_id"])
+            if ok:
+                return (
+                    f"Cancelled: {patient['patient_name']} on {target['start_at']}  "
+                    f"(ID: {target['appointment_id']})"
+                )
+            return f"Could not cancel appointment {target['appointment_id']}."
+
+        @tool("get_my_available_slots")
+        def get_my_available_slots(date_str: str) -> str:
+            """Get open appointment slots for ME on a specific date.
+
+            Call this before booking to show what times are available.
+            Input: date_str — ISO date (e.g. '2026-06-10')
+            """
+            slots = fetch_available_slots(doctor_id, date_str)
+            if not slots:
+                return f"No available slots on {date_str}."
+
+            def _fmt(hhmm: str) -> str:
+                h, m = map(int, hhmm.split(":"))
+                period = "am" if h < 12 else "pm"
+                h12 = h % 12 or 12
+                return f"{h12}:{m:02d}{period}" if m else f"{h12}{period}"
+
+            formatted = ", ".join(_fmt(s) for s in slots)
+            return f"Available slots for {doctor_name} on {date_str}:\n{formatted}"
+
+        return [
+            get_my_schedule,
+            get_my_next_appointment,
+            get_patient_records,
+            search_patient_history_for_doctor,
+            add_patient_medical_record,
+            book_appointment_for_patient,
+            cancel_patient_appointment,
+            get_my_available_slots,
+        ]
+
+
 else:
     ADMIN_TOOLS = []
+
     def _make_patient_tools(patient_id: str, patient_name: str) -> list:  # type: ignore[misc]
+        return []
+
+    def _make_doctor_tools(doctor_id: str, doctor_name: str) -> list:  # type: ignore[misc]
         return []
 
 
@@ -643,6 +895,8 @@ def run_role_crew(
     chat_history: list[dict] | None = None,
     patient_id: str | None = None,
     patient_name: str | None = None,
+    doctor_id: str | None = None,
+    doctor_name: str | None = None,
 ) -> str:
     # Admin/doctor schedule queries need full context; patient chat can be lightly bounded.
     row_limit = 60 if role == "patient" else None
@@ -663,6 +917,62 @@ def run_role_crew(
         return _fallback_response(role, prompt, context)
 
     try:
+        # ── Doctor role: dedicated agent with doctor-scoped tools ───────────
+        if role == "doctor" and doctor_id:
+            dname = doctor_name or doctor_id
+            doctor_tools = _make_doctor_tools(doctor_id, dname)
+
+            doctor_agent = Agent(
+                role="Doctor Assistant",
+                goal="Help the doctor manage their schedule, access patient records, and document clinical encounters.",
+                backstory=(
+                    f"You are a clinical assistant for Dr. {dname}. "
+                    "You help with: checking your schedule, reviewing and summarizing patient "
+                    "medical records, adding new record entries, and booking or cancelling "
+                    "patient appointments. "
+                    "You may also answer general medical and clinical questions using your knowledge — "
+                    "for symptom questions or differential diagnoses, answer directly and concisely. "
+                    "IMPORTANT: When the conversation shows you asked a question and the doctor's "
+                    "latest message is a short reply (a name, date, or time), treat it as the "
+                    "direct answer to your question and proceed."
+                ),
+                tools=doctor_tools,
+                allow_delegation=False,
+                verbose=False,
+            )
+
+            task = Task(
+                description=(
+                    f"Today's date is {date.today().isoformat()}.\n"
+                    f"The logged-in doctor is: Dr. {dname} (doctor_id={doctor_id}).\n\n"
+                    f"{history_text}"
+                    f"Doctor's message: {prompt}\n\n"
+                    "Rules:\n"
+                    "- For schedule questions, use get_my_schedule or get_my_next_appointment.\n"
+                    "- For patient records or lab results, use get_patient_records or "
+                    "search_patient_history_for_doctor.\n"
+                    "- When adding a record entry, ask for all details then call "
+                    "add_patient_medical_record.\n"
+                    "- When booking: ask patient → date → call get_my_available_slots → "
+                    "confirm time → call book_appointment_for_patient.\n"
+                    "- When cancelling: call cancel_patient_appointment with the patient name.\n"
+                    "- For general medical/clinical questions (symptoms, differentials, treatment), "
+                    "answer directly from your medical knowledge without using tools.\n"
+                    "- Never re-ask for something already given in the conversation."
+                ),
+                expected_output="A concise, clinically appropriate response.",
+                agent=doctor_agent,
+            )
+
+            crew = Crew(
+                agents=[doctor_agent],
+                tasks=[task],
+                process=Process.sequential,
+                verbose=False,
+            )
+            result = crew.kickoff()
+            return str(result)
+
         # ── Patient role: dedicated agent with patient-scoped tools ──────────
         if role == "patient" and patient_id:
             pname = patient_name or patient_id

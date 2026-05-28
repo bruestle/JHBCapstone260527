@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 import re
 
-from crew_agents import run_role_crew
+from crew_agents import run_role_crew, CREWAI_AVAILABLE
 from db import (
     DOCTOR_SEED,
     fetch_all_appointments,
@@ -422,6 +422,11 @@ with left_col:
         use_container_width=True,
         on_click=_logout,
     )
+    st.divider()
+    if CREWAI_AVAILABLE:
+        st.caption("🟢 LLM available")
+    else:
+        st.caption("🔴 LLM unavailable")
 
 with right_col:
     # counts = fetch_counts()

@@ -9,7 +9,10 @@ if str(ROOT_DIR) not in sys.path:
 	sys.path.insert(0, str(ROOT_DIR))
 
 from database.db import (  # noqa: E402
+	add_medical_record,
 	clear_patient_history_vectors,
+	delete_medical_record,
+	ENCOUNTER_TYPES,
 	DOCTOR_SEED,
 	PATIENT_SEED,
 	cancel_appointment,
@@ -35,10 +38,13 @@ from database.db import (  # noqa: E402
 	search_patients_by_record_keyword,
 	seed_mock_data,
 	sync_patient_history_vectors,
+	update_medical_record,
 	update_patient_contact_info,
 )
 
 __all__ = [
+	"add_medical_record",
+	"ENCOUNTER_TYPES",
 	"DOCTOR_SEED",
 	"PATIENT_SEED",
 	"cancel_appointment",
@@ -55,7 +61,9 @@ __all__ = [
 	"fetch_doctor_list",
 	"fetch_doctor_patients_with_keyword",
 	"fetch_patient_list",
+	"delete_medical_record",
 	"fetch_medical_records",
+	"update_medical_record",
 	"fetch_patient_roster",
 	"index_medical_record_rows",
 	"init_db",

@@ -1643,6 +1643,51 @@ def fetch_medical_records(patient_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def add_medical_record(
+    patient_id: int | str,
+    note: str,
+    doctor_id: int | str | None = None,
+    encounter_type: str = "OfficeVisit",
+) -> str:
+    """Insert a new medical record and return its record_id."""
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    record_id = f"record-{_uuid.uuid4().hex[:12]}"
+    created_at = _dt.now().strftime("%Y-%m-%d %H:%M")
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO medical_records(record_id, patient_id, note, encounter_type, doctor_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record_id,
+                int(patient_id),
+                note,
+                encounter_type,
+                int(doctor_id) if doctor_id is not None else None,
+                created_at,
+            ),
+        )
+    return record_id
+
+
+def update_medical_record(record_id: str, note: str, encounter_type: str) -> None:
+    """Update the note and encounter type of an existing medical record."""
+    with connection() as conn:
+        conn.execute(
+            "UPDATE medical_records SET note = ?, encounter_type = ? WHERE record_id = ?",
+            (note, encounter_type, record_id),
+        )
+
+
+def delete_medical_record(record_id: str) -> None:
+    """Permanently delete a medical record by its record_id."""
+    with connection() as conn:
+        conn.execute("DELETE FROM medical_records WHERE record_id = ?", (record_id,))
+
+
 def fetch_all_appointments() -> list[dict]:
     with connection() as conn:
         rows = conn.execute(

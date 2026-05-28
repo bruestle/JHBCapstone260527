@@ -12,7 +12,7 @@ from db import fetch_appointments_for_patient, fetch_medical_records, fetch_pati
 
 def _enforce_patient_login() -> str:
     if not st.session_state.get("authenticated"):
-        st.switch_page("pages/login.py")
+        st.switch_page("_pages/login.py")
     if st.session_state.get("role") != "patient":
         st.error("This page is for the Patient role.")
         st.stop()
@@ -20,6 +20,8 @@ def _enforce_patient_login() -> str:
 
 
 def _get_patient_name(patient_id: str) -> str:
+    if st.session_state.get("user_name"):
+        return st.session_state.user_name
     for p in fetch_patient_list():
         if str(p["patient_id"]) == str(patient_id):
             return p["patient_name"]
